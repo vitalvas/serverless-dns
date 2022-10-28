@@ -3,65 +3,87 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"errors"
+	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/aws/aws-lambda-go/events"
 )
 
-func (srv *Server) lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func (srv *Server) lambdaHandler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	if srv.dnsHandler == nil {
-		srv.dnsHandler = NewDNSHandler(&DNSConfig{
-			timeout: 4,
-			upstreams: []string{
-				// Cloudflare
-				"1.1.1.1:53",
-				"1.0.0.1:53",
+		handler, err := NewDNSHandler()
+		if err != nil {
+			return events.APIGatewayV2HTTPResponse{}, err
+		}
 
-				// Google
-				"8.8.8.8:53",
-				"8.8.4.4:53",
-			},
-		})
+		srv.dnsHandler = handler
 	}
 
-	query, err := parseQuery(req)
-	if err != nil || len(query) == 0 {
-		return events.APIGatewayProxyResponse{
+	var query string
+	switch req.RequestContext.HTTP.Method {
+	case http.MethodGet:
+		query = req.QueryStringParameters["dns"]
+
+		if len(query) > 512 {
+			return events.APIGatewayV2HTTPResponse{
+				StatusCode: http.StatusRequestURITooLong,
+			}, nil
+		}
+
+	case http.MethodPost:
+		if req.Headers["content-type"] != "application/dns-message" {
+			return events.APIGatewayV2HTTPResponse{
+				StatusCode: http.StatusUnsupportedMediaType,
+			}, nil
+		}
+
+		query = req.Body
+
+		if len(query) > 512 {
+			return events.APIGatewayV2HTTPResponse{
+				StatusCode: http.StatusRequestEntityTooLarge,
+			}, nil
+		}
+
+	default:
+		return events.APIGatewayV2HTTPResponse{
+			StatusCode: http.StatusNotImplemented,
+		}, nil
+
+	}
+
+	if len(query) < 12 {
+		return events.APIGatewayV2HTTPResponse{
+			StatusCode: http.StatusBadRequest,
+		}, nil
+	}
+
+	binary, err := base64.URLEncoding.DecodeString(query)
+	if err != nil {
+		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusBadRequest,
 			Body:       err.Error(),
 		}, nil
 	}
 
-	body, err := srv.dnsHandler.Query(ctx, query)
+	body, err := srv.dnsHandler.Query(ctx, binary)
 	if err != nil {
-		return events.APIGatewayProxyResponse{
+		log.Println("error handle:", err)
+
+		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusInternalServerError,
 			Body:       err.Error(),
 		}, nil
 	}
 
-	return events.APIGatewayProxyResponse{
+	return events.APIGatewayV2HTTPResponse{
 		StatusCode:      http.StatusOK,
-		Body:            base64.StdEncoding.EncodeToString(body),
+		Body:            base64.RawURLEncoding.EncodeToString(body),
 		IsBase64Encoded: true,
 		Headers: map[string]string{
 			"Content-Type":   "application/dns-message",
 			"Content-Length": strconv.Itoa(len(body)),
 		},
 	}, nil
-}
-
-func parseQuery(req events.APIGatewayProxyRequest) (string, error) {
-	switch req.HTTPMethod {
-	case http.MethodGet:
-		return req.QueryStringParameters["dns"], nil
-
-	case http.MethodPost:
-		return req.Body, nil
-
-	}
-
-	return "", errors.New("Invalid DNS request")
 }
