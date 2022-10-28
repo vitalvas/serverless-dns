@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Timeout: 30
+
+Resources:
+  dohServer:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main
+      Runtime: go1.x
+      MemorySize: 128
+      Timeout: 10
+      CodeUri: ../function.zip
+      Events:
+        NativeGetEvent:
+          Type: HttpApi
+          Properties:
+            Path: /dns-query
+            Method: GET
+        NativePostEvent:
+          Type: HttpApi
+          Properties:
+            Path: /dns-query
+            Method: POST
+
+  dohServerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${dohServer}"
+      RetentionInDays: 7
