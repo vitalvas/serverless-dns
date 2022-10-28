@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -72,19 +71,26 @@ func NewDNSHandler() (*DNSHandler, error) {
 	return handler, nil
 }
 
-func (handler *DNSHandler) randomUpstream() string {
-	return handler.upstreams[rand.Intn(len(handler.upstreams))]
-}
-
 func (handler *DNSHandler) Query(ctx context.Context, binary []byte) ([]byte, error) {
 	msg := new(dns.Msg)
 	if err := msg.Unpack(binary); err != nil {
 		return nil, err
 	}
 
-	upstream := handler.randomUpstream()
+	var response *dns.Msg
+	var err error
 
-	response, _, err := handler.client.ExchangeContext(ctx, msg, upstream)
+	for _, upstream := range handler.upstreams {
+		response, _, err = handler.client.ExchangeContext(ctx, msg, upstream)
+		if err != nil {
+			continue
+		}
+
+		if response.Answer != nil {
+			break
+		}
+	}
+
 	if err != nil {
 		return nil, err
 	}
